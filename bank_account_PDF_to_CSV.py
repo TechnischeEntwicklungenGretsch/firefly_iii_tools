@@ -11,21 +11,21 @@ from difflib import SequenceMatcher
 DATE_RE = re.compile(r"^\d{2}\.\d{2}\.\d{4}")
 AMOUNT_RE = re.compile(r"-?\d{1,3}(?:\.\d{3})*,\d{2}")
 END_MARKER_RE = re.compile(
-    r"(Kontostand am|Gesamtumsatzsummen|Ihr Dispositionskredit|Hinweise zum Kontoauszug|Deutsche Kreditbank AG|Seite \d+ von)",
+    r"(Kontostand am \d{2}\.\d{2}\.\d{4} um \d{2}\:\d{2} Uhr|Gesamtumsatzsummen Summe Soll EUR)",
     re.IGNORECASE
 )
 
 def fuzzy_score(a, b):
     return SequenceMatcher(None, a.lower(), b.lower()).ratio()
 
-def get_fuzzy_declarations(text, threshold=0.4, limit=5):
+def get_fuzzy_declarations(text, threshold, limit):
     names = load_declarations()
     scored = []
 
-    for name in names:
-        score = fuzzy_score(text, name)
+    for key in names:
+        score = fuzzy_score(text, key)
         if score >= threshold:
-            scored.append((name, score))
+            scored.append((key, score))
 
     scored.sort(key=lambda x: x[1], reverse=True)
     return scored[:limit]
@@ -50,31 +50,29 @@ def load_declarations(path="split_rules.json"):
 
 def ask_user_select_declaration(text):
     while True:
-        fuzzy = get_fuzzy_declarations(text)
+        fuzzy = get_fuzzy_declarations(text, 0.4, 10)
 
         if fuzzy:
             print("\n🔎 Ähnliche Deklarationen:")
             for i, (name, score) in enumerate(fuzzy, 1):
                 print(f"[{i}] {name} ({int(score * 100)}%)")
 
-            choice = input(
-                "👉 Nummer wählen | a = alle anzeigen | n = neu: "
-            ).strip().lower()
+        choice = input(
+            "👉 Nummer wählen | a = alle anzeigen | n = neu: "
+        ).strip().lower()
 
-            if choice.isdigit():
-                idx = int(choice) - 1
-                if 0 <= idx < len(fuzzy):
-                    return fuzzy[idx][0]
+        if choice.isdigit():
+            idx = int(choice) - 1
+            if 0 <= idx < len(fuzzy):
+                return fuzzy[idx][0]
 
-            if choice == "a":
-                break  # → unten alle anzeigen
-            elif choice == "n":
-                return None
-            else:
-                print("⚠️ Ungültige Auswahl")
-                continue
-        else: 
-            break
+        if choice == "a":
+            break  # → unten alle anzeigen
+        elif choice == "n":
+            return None
+        else:
+            print("⚠️ Ungültige Auswahl")
+            continue
     
     # Fallback: komplette Liste
     names = load_declarations()
@@ -140,13 +138,14 @@ def parse_lines(lines):
 
     for line in lines:
         line = line.rstrip()
-
+        datecheck = line[:15].strip()
         # Neue Buchung
-        if DATE_RE.match(line):
+        if DATE_RE.match(datecheck):
             if current:
                 bookings.append(current)
 
             seen_description = False
+            line = line.strip()
             date = line[:10]
             line = line[10:].strip()
 
@@ -167,7 +166,7 @@ def parse_lines(lines):
                 else:
                     current["Haben"] = amount
 
-            line = line[:20].strip()
+            line = line[:40].strip()
             current["Buchungsart"] = line
 
 
@@ -180,10 +179,11 @@ def parse_lines(lines):
 
             clean = line.strip()
             if len(clean) < 2:
-                continue
+                bookings.append(current)
+                current = None
 
             # 👇 alles in EIN Feld
-            if current["Textblock"]:
+            elif current["Textblock"]:
                 current["Textblock"] += " " + clean
             else:
                 current["Textblock"] = clean
